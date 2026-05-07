@@ -1,0 +1,17 @@
+services:
+  agent:
+    build: ./agent
+    container_name: soundtide-agent
+    restart: unless-stopped
+    # SSDP and mDNS rely on multicast, which only works in host network mode.
+    network_mode: host
+    environment:
+      - SOUNDTIDE_HTTP_PORT=${SOUNDTIDE_HTTP_PORT:-7780}
+      - SOUNDTIDE_UPNP_PORT=${SOUNDTIDE_UPNP_PORT:-7790}
+      - SOUNDTIDE_DATA_DIR=/data
+      - SOUNDTIDE_LOG_LEVEL=${SOUNDTIDE_LOG_LEVEL:-info}
+      - SOUNDTIDE_NAS_WOL_MAC=${SOUNDTIDE_NAS_WOL_MAC:-}
+      - SOUNDTIDE_WORKER_URL=${SOUNDTIDE_WORKER_URL:-}
+      - SOUNDTIDE_HOUSEHOLD_TOKEN=${SOUNDTIDE_HOUSEHOLD_TOKEN:-}
+    volumes:
+      - ./data:/data

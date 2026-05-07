@@ -1,0 +1,23 @@
+{
+  "name": "soundtide-pwa",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SoundTide Progressive Web App — controls Bose SoundTouch speakers from any modern browser.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lit": "^3.2.0",
+    "nanostores": "^0.11.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8",
+    "vite-plugin-pwa": "^0.20.5"
+  }
+}

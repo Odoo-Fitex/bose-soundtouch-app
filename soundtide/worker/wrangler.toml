@@ -1,0 +1,24 @@
+name = "soundtide"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# One Durable Object per household, holding the agent's WebSocket.
+[[durable_objects.bindings]]
+name = "TUNNEL"
+class_name = "Tunnel"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["Tunnel"]
+
+# D1 stores presets/scenes/schedules as a backup of the Pi database.
+[[d1_databases]]
+binding = "DB"
+database_name = "soundtide"
+# Replace with the id printed by `wrangler d1 create soundtide`.
+database_id = "REPLACE_ME"
+
+# Bearer token shared with the Pi (matches SOUNDTIDE_HOUSEHOLD_TOKEN).
+# Set with: wrangler secret put HOUSEHOLD_TOKEN
+# (Do not put real secrets in this file.)

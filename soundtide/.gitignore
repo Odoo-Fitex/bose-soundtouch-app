@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+*.log
+*.sqlite
+*.sqlite-journal
+.DS_Store
