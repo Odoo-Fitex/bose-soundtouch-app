@@ -1,7 +1,10 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
+import fastifyStatic from "@fastify/static";
 import wol from "wol";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { logger } from "../log.js";
 import { config } from "../config.js";
 import { db } from "../db/index.js";
@@ -198,6 +201,23 @@ export async function buildServer(deps: ApiDeps) {
       });
     });
   });
+
+  // ---- Static PWA --------------------------------------------------------------
+  // The Dockerfile copies the built PWA bundle to /app/pwa-dist; serve it at /.
+  // In dev (running with tsx outside Docker) the directory may be absent and we
+  // simply run as an API-only server.
+  const candidates = [
+    "/app/pwa-dist",
+    path.resolve(process.cwd(), "pwa-dist"),
+    path.resolve(process.cwd(), "../pwa/dist"),
+  ];
+  const pwaDir = candidates.find((p) => existsSync(p));
+  if (pwaDir) {
+    await app.register(fastifyStatic, { root: pwaDir, prefix: "/" });
+    log.info(`pwa served from ${pwaDir}`);
+  } else {
+    log.info("no pwa bundle found — running api-only");
+  }
 
   log.info("api server built");
   return app;

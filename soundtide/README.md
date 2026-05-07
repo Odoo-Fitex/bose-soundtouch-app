@@ -13,12 +13,50 @@ This monorepo contains three components:
 
 See `../SoundTide_DesignDoc.docx` for the full design rationale.
 
+## Settings checklist (read before first launch)
+
+You can run the agent with zero changes to `.env`, but two things benefit from
+attention before `docker compose up`:
+
+**Required to think about:**
+- **`TZ`** in `.env` — set to your IANA time zone (e.g. `Europe/Paris`,
+  `America/New_York`). Cron expressions are evaluated in the container's local
+  time, so without this your 07:00 alarm fires at 07:00 UTC.
+- **Hostname when flashing the Pi** — set it to `soundtide-agent` in the Pi
+  Imager's advanced options, so the PWA can reach the agent at
+  `http://soundtide-agent.local:7780` from any phone on the LAN.
+
+**Worth setting up next, but optional:**
+- **Static DHCP lease** for the Pi in the router (so a router reboot doesn't
+  change the IP and break the PWA's bookmarks).
+- **`SOUNDTIDE_NAS_WOL_MAC`** — only if you want the in-app *Wake NAS* button.
+  Enable WOL in DSM first (Control Panel → Hardware & Power), then paste the
+  NAS LAN-port MAC here.
+- **`SOUNDTIDE_WORKER_URL` + `SOUNDTIDE_HOUSEHOLD_TOKEN`** — only if you want
+  off-LAN access. See the next section.
+
+**Things you don't need to set:**
+- Speaker IPs, MACs, or any per-device config — discovery is automatic via
+  SSDP and mDNS.
+- Radio station list — fetched live from radio-browser.info.
+- DLNA / Synology server URL — the agent picks it up automatically when the
+  NAS is awake on the LAN; if it doesn't appear, paste the description URL in
+  Settings → NAS once.
+
+**Network requirements** (true regardless of config):
+- The Pi must be on the **same VLAN as the speakers**, with multicast and
+  IGMP snooping enabled (default on most home routers, sometimes disabled on
+  mesh systems — check the router admin if no speakers appear after 60 s).
+- Outbound TCP/443 must work for `radio-browser.info` and the optional
+  Worker tunnel; nothing inbound to the home router is required.
+
 ## Quick start (LAN-only)
 
 ```bash
 # 1. On the Raspberry Pi (Pi OS Lite 64-bit, Docker installed):
 git clone <this repo> ~/soundtide && cd ~/soundtide
 cp .env.example .env
+$EDITOR .env             # at minimum, set TZ
 docker compose up -d
 
 # 2. From a phone or laptop on the same Wi-Fi:
