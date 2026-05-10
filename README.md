@@ -1,3 +1,4 @@
+![Project Logo](soundtide-icong.svg)
 # SoundTide
 
 A local-first replacement for the Bose SoundTouch app, designed for a household
