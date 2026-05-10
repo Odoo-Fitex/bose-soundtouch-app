@@ -1,0 +1,52 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>SoundTide</title>
+  <desc>Rounded square icon: deep navy background with a teal ocean wave at the bottom and five white audio-equalizer bars rising from the wave crest, reading as both sound and tide.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0c1530"/>
+      <stop offset="100%" stop-color="#0e3a52"/>
+    </linearGradient>
+    <linearGradient id="waveTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5eead4"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+    <linearGradient id="waveBack" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#0e7490"/>
+    </linearGradient>
+    <clipPath id="round">
+      <rect x="0" y="0" width="1024" height="1024" rx="225" ry="225"/>
+    </clipPath>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" rx="225" ry="225" fill="url(#bg)"/>
+
+  <g clip-path="url(#round)">
+    <circle cx="800" cy="200" r="10" fill="#67e8f9" opacity="0.55"/>
+    <circle cx="850" cy="270" r="5"  fill="#67e8f9" opacity="0.40"/>
+    <circle cx="200" cy="230" r="7"  fill="#67e8f9" opacity="0.45"/>
+    <circle cx="160" cy="320" r="3"  fill="#67e8f9" opacity="0.35"/>
+
+    <path d="M 0 700
+             C 170 620, 340 780, 512 700
+             C 684 620, 854 780, 1024 700
+             L 1024 1024 L 0 1024 Z"
+          fill="url(#waveBack)" opacity="0.55"/>
+
+    <path d="M 0 770
+             C 170 690, 340 850, 512 770
+             C 684 690, 854 850, 1024 770
+             L 1024 1024 L 0 1024 Z"
+          fill="url(#waveTop)"/>
+
+    <g fill="#ffffff">
+      <rect x="260" y="470" width="60" height="280" rx="30"/>
+      <rect x="370" y="350" width="60" height="400" rx="30"/>
+      <rect x="480" y="240" width="60" height="510" rx="30"/>
+      <rect x="590" y="350" width="60" height="400" rx="30"/>
+      <rect x="700" y="470" width="60" height="280" rx="30"/>
+    </g>
+
+    <ellipse cx="512" cy="760" rx="430" ry="20" fill="#ffffff" opacity="0.18"/>
+  </g>
+</svg>
