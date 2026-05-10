@@ -14,6 +14,11 @@ const builder = new XMLBuilder({
   ignoreAttributes: false,
   attributeNamePrefix: "@_",
   format: false,
+  // CRITICAL: the SoundTouch firmware uses a strict XML parser that rejects
+  // HTML-style empty boolean attributes (e.g. `isPresetable` instead of
+  // `isPresetable="true"`). Default fast-xml-parser config suppresses them,
+  // which produces invalid output for /select. Force the explicit form.
+  suppressBooleanAttributes: false,
 });
 
 export function parseXml<T = unknown>(xml: string): T {
@@ -31,8 +36,19 @@ function asArray<T>(x: T | T[] | undefined | null): T[] {
 
 function s(v: unknown): string | null {
   if (v == null) return null;
-  if (typeof v === "object" && "#text" in (v as object)) return String((v as { "#text": unknown })["#text"]);
-  return String(v);
+  if (typeof v === "object") {
+    // fast-xml-parser turns `<art artImageStatus="..."/>` into
+    // `{ "@_artImageStatus": "..." }` — an object with no #text. Falling
+    // through to String(v) on such a value yields the literal "[object
+    // Object]", which then leaks all the way to the SoundTouch art URL.
+    // If there's no #text, treat the element as empty.
+    const tx = (v as Record<string, unknown>)["#text"];
+    if (tx === undefined || tx === null) return null;
+    const out = String(tx).trim();
+    return out === "" ? null : out;
+  }
+  const out = String(v).trim();
+  return out === "" ? null : out;
 }
 
 export function parseInfo(xml: string): DeviceInfo {
@@ -75,9 +91,14 @@ export function parseSources(xml: string): SourceItem[] {
 export function parseZone(xml: string): ZoneState {
   const o = parseXml<{ zone: any }>(xml).zone;
   if (!o) return { master: null, members: [] };
-  const master = String(o["@_master"] ?? "").toUpperCase() || null;
+  // The Bose API doc shows member MACs wrapped in quotes (literally
+  // `"B0D5CCB01E30"`); some firmware emits them that way, some don't.
+  // Strip surrounding quotes & whitespace defensively so equality checks work.
+  const clean = (v: string) =>
+    v.replace(/^[\s"']+|[\s"']+$/g, "").toUpperCase();
+  const master = (o["@_master"] ? clean(String(o["@_master"])) : "") || null;
   const members = asArray(o.member).map((m: any) => ({
-    deviceId: String(s(m) ?? "").toUpperCase(),
+    deviceId: clean(String(s(m) ?? "")),
     ip: String(m["@_ipaddress"] ?? ""),
   })).filter(m => m.deviceId);
   return { master, members };
@@ -119,9 +140,15 @@ export function buildContentItem(ci: ContentItem): string {
   });
 }
 
+/**
+ * Build a /key payload. The SoundTouch firmware (at least up to 27.x) refuses
+ * any sender attribute other than "Gabbo" — sending "SoundTide" or omitting
+ * the attribute returns CLIENT_XML_ERROR 1019. "Gabbo" is the canonical name
+ * used in Bose's own SoundTouch Web API docs and their app, so we use it too.
+ */
 export function buildKeyPayload(key: string, state: "press" | "release"): string {
   return buildXml({
-    key: { "@_state": state, "@_sender": "SoundTide", "#text": key },
+    key: { "@_state": state, "@_sender": "Gabbo", "#text": key },
   });
 }
 

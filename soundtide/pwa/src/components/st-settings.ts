@@ -1,6 +1,6 @@
 import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { $devices, refreshDevices } from "../store.js";
+import { $devices, $theme, refreshDevices, type Theme } from "../store.js";
 import { api, type Device } from "../api.js";
 
 @customElement("st-settings")
@@ -9,6 +9,8 @@ export class StSettings extends LitElement {
   @state() private token = localStorage.getItem("soundtide.token") ?? "";
   @state() private nasUrl = "";
   @state() private msg = "";
+  @state() private theme: Theme = $theme.get();
+  @state() private rescanning = false;
 
   static styles = css`
     :host { display: block; height: 100%; }
@@ -22,10 +24,11 @@ export class StSettings extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.unsub = $devices.subscribe(v => { this.devices = [...v]; });
+    this.unsub.push($devices.subscribe(v => { this.devices = [...v]; }));
+    this.unsub.push($theme.subscribe(v => { this.theme = v; }));
   }
-  disconnectedCallback(): void { this.unsub?.(); super.disconnectedCallback(); }
-  private unsub: (() => void) | null = null;
+  disconnectedCallback(): void { this.unsub.forEach(f => f()); super.disconnectedCallback(); }
+  private unsub: (() => void)[] = [];
 
   private save() {
     api.setToken(this.token.trim() || null);
@@ -48,6 +51,24 @@ export class StSettings extends LitElement {
     try { await api.rename(id, name); await refreshDevices(); } catch (e) { alert(String(e)); }
   }
 
+  /** Force a real LAN scan + probe of every known IP, not just a re-pull of
+   * the local cache. Speakers that just came back online appear here within
+   * a few seconds. */
+  private async rescan() {
+    this.rescanning = true;
+    this.msg = "Scanning LAN…";
+    try {
+      const r = await api.rescan();
+      await refreshDevices();
+      this.msg = `Probed ${r.knownProbed} known speaker${r.knownProbed === 1 ? "" : "s"} · M-SEARCH ${r.ssdpFired ? "fired" : "skipped"}.`;
+    } catch (e) {
+      this.msg = `Scan failed: ${e}`;
+    } finally {
+      this.rescanning = false;
+      setTimeout(() => (this.msg = ""), 4000);
+    }
+  }
+
   render() {
     return html`
       <div class="scroll">
@@ -66,7 +87,10 @@ export class StSettings extends LitElement {
                 <button class="btn" @click=${() => this.rename(d.deviceId, d.name)}>Rename</button>
               </div>
             `)}
-        <button class="btn" @click=${() => refreshDevices()}>Re-scan</button>
+        <button class="btn btn-primary" ?disabled=${this.rescanning}
+                @click=${() => this.rescan()}>
+          ${this.rescanning ? "Scanning…" : "Rescan LAN"}
+        </button>
 
         <h2>Off-LAN access</h2>
         <p class="muted">Paste the household token configured on the Pi (and on the Worker secret). Only needed when accessing the app from outside your home network.</p>
@@ -74,6 +98,15 @@ export class StSettings extends LitElement {
           <input type="text" placeholder="household token" .value=${this.token}
                  @input=${(e: Event) => (this.token = (e.target as HTMLInputElement).value)} />
           <button class="btn btn-primary" @click=${() => this.save()}>Save</button>
+        </div>
+
+        <h2>Theme</h2>
+        <p class="muted">Auto follows your device's light/dark setting.</p>
+        <div class="row" style="gap: 6px;">
+          ${(["auto","dark","light"] as Theme[]).map(t => html`
+            <button class="btn ${this.theme === t ? "btn-primary" : ""}" style="flex:1"
+                    @click=${() => $theme.set(t)}>${t[0]?.toUpperCase()}${t.slice(1)}</button>
+          `)}
         </div>
 
         <h2>NAS / DLNA</h2>

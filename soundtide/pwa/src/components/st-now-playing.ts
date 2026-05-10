@@ -1,38 +1,27 @@
 import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import {
-  $devices, $selectedSpeaker, $now, $vol, press, setVolume, toggleMute,
-} from "../store.js";
-import type { Device, NowPlaying, Volume } from "../api.js";
+import { $selectedSpeaker, $now, $vol, $cachedArt, press, isImageUrl } from "../store.js";
+import type { NowPlaying, Volume } from "../api.js";
+import "./st-zone-volumes.js";
+import "./st-favourites.js";
+import "./st-search.js";
+import "./st-zone-toggle.js";
+
+// Speaker art-status sentinels we should treat as "no real art".
+const NO_ART = new Set(["", "INVALID", "DOWNLOADING", "SHOW_DEFAULT_IMAGE"]);
 
 @customElement("st-now-playing")
 export class StNowPlaying extends LitElement {
-  @state() private devices: Device[] = [];
   @state() private selected: string | null = null;
   @state() private np: NowPlaying | undefined;
   @state() private vol: Volume | undefined;
+  @state() private cachedArt: Record<string, string> = {};
+  @state() private artBroken = false;
 
   static styles = css`
     :host { display: block; height: 100%; }
     .scroll { overflow-y: auto; padding: 16px; padding-bottom: 16px; height: 100%; }
-    .speakers {
-      display: flex; gap: 8px; overflow-x: auto;
-      padding-bottom: 8px;
-      scroll-snap-type: x mandatory;
-      margin: 0 -16px 16px; padding-left: 16px; padding-right: 16px;
-    }
-    .speaker {
-      flex: 0 0 auto;
-      padding: 10px 14px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: var(--bg-elevated);
-      color: var(--fg-muted);
-      scroll-snap-align: start;
-      min-height: 44px;
-    }
-    .speaker.active { border-color: var(--accent); color: var(--fg); }
-    .speaker.offline { opacity: 0.5; }
+    .search-wrap { margin-bottom: 16px; }
     .art {
       width: min(280px, 70vw); height: min(280px, 70vw);
       border-radius: 18px;
@@ -48,7 +37,7 @@ export class StNowPlaying extends LitElement {
     .meta .sub { color: var(--fg-muted); margin-top: 4px; }
     .controls {
       display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
-      margin-bottom: 24px;
+      margin-bottom: 16px;
     }
     .controls button {
       min-height: 56px; font-size: 22px;
@@ -56,21 +45,22 @@ export class StNowPlaying extends LitElement {
       border-radius: 14px;
     }
     .play { background: var(--accent) !important; color: #0a1224 !important; border-color: transparent !important; }
-    .vol { display: flex; align-items: center; gap: 12px; }
-    .vol input { flex: 1; }
     .source-pill {
       display: inline-block; padding: 4px 8px; border-radius: 999px;
       font-size: 11px; background: var(--accent-strong); color: var(--fg);
       text-transform: uppercase; letter-spacing: 0.04em; margin-right: 6px;
     }
+    .quick { margin-top: 16px; }
+    .quick .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .btn { padding: 10px 14px; border-radius: 12px; background: var(--bg-elevated); color: var(--fg); border: 1px solid var(--border); }
   `;
 
   connectedCallback(): void {
     super.connectedCallback();
-    this.unsub.push($devices.subscribe(v => { this.devices = [...v]; }));
-    this.unsub.push($selectedSpeaker.subscribe(v => { this.selected = v; this.refresh(); }));
-    this.unsub.push($now.subscribe(() => this.refresh()));
+    this.unsub.push($selectedSpeaker.subscribe(v => { this.selected = v; this.artBroken = false; this.refresh(); }));
+    this.unsub.push($now.subscribe(() => { this.artBroken = false; this.refresh(); }));
     this.unsub.push($vol.subscribe(() => this.refresh()));
+    this.unsub.push($cachedArt.subscribe(v => { this.cachedArt = { ...v }; }));
   }
   disconnectedCallback(): void { this.unsub.forEach(f => f()); super.disconnectedCallback(); }
   private unsub: (() => void)[] = [];
@@ -81,61 +71,75 @@ export class StNowPlaying extends LitElement {
     this.vol = $vol.get()[this.selected];
   }
 
-  private select(id: string) { $selectedSpeaker.set(id); }
+  /** Best art URL we have for the current speaker, or null if we should fall
+   *  back to the music-note placeholder. */
+  private artUrl(): string | null {
+    if (this.artBroken) return null;
+    const fromSpeaker = this.np?.artUrl ?? "";
+    const status = this.np?.artStatus ?? "";
+    if (isImageUrl(fromSpeaker) && !NO_ART.has(status)) return fromSpeaker;
+    const cached = this.selected ? this.cachedArt[this.selected] : "";
+    return isImageUrl(cached) ? cached : null;
+  }
 
   private playing() {
     return this.np?.playStatus === "PLAY_STATE" || this.np?.playStatus === "BUFFERING_STATE";
   }
 
+  private hasContent(): boolean {
+    if (!this.np) return false;
+    if (this.np.source && this.np.source !== "STANDBY" && this.np.source !== "INVALID_SOURCE") return true;
+    if (this.np.contentItem && this.np.contentItem.source !== "STANDBY") return true;
+    return false;
+  }
+
   render() {
-    if (!this.selected) return html`<div class="scroll"><div class="card">Looking for speakers…</div></div>`;
+    if (!this.selected) {
+      return html`<div class="scroll"><div class="search-wrap"><st-search></st-search></div><st-favourites></st-favourites></div>`;
+    }
     const id = this.selected;
     const playPause = this.playing() ? "PAUSE" : "PLAY";
     const title = this.np?.track || this.np?.stationName || this.np?.contentItem?.itemName || "—";
     const subtitle = [this.np?.artist, this.np?.album].filter(Boolean).join(" · ") ||
                      this.np?.description || this.np?.stationLocation || "";
     const source = this.np?.source ?? "";
+
     return html`
       <div class="scroll">
-        <div class="speakers">
-          ${this.devices.map(d => html`
-            <button class="speaker ${d.deviceId === id ? "active" : ""} ${d.online ? "" : "offline"}"
-                    @click=${() => this.select(d.deviceId)}>${d.name}</button>
-          `)}
-        </div>
+        <div class="search-wrap"><st-search></st-search></div>
 
-        <div class="art">
-          ${this.np?.artUrl ? html`<img src=${this.np.artUrl} alt="" />` : html`<span style="font-size:48px">♪</span>`}
-        </div>
-        <div class="meta">
-          <div class="title">${title}</div>
-          <div class="sub">${source ? html`<span class="source-pill">${source}</span>` : ""}${subtitle}</div>
-        </div>
-
-        <div class="controls">
-          <button @click=${() => press(id, "PREV_TRACK")}>⏮</button>
-          <button @click=${() => press(id, "REPEAT_OFF")}>↻</button>
-          <button class="play" @click=${() => press(id, playPause)}>${this.playing() ? "⏸" : "▶"}</button>
-          <button @click=${() => press(id, "SHUFFLE_ON")}>⤮</button>
-          <button @click=${() => press(id, "NEXT_TRACK")}>⏭</button>
-        </div>
-
-        <div class="card col">
-          <div class="row">
-            <span>Volume</span>
-            <span class="muted">${this.vol?.actual ?? 0}%</span>
+        ${this.hasContent() ? html`
+          <div class="art">
+            ${(() => {
+              const u = this.artUrl();
+              return u
+                ? html`<img src=${u} alt=""
+                            @error=${() => { this.artBroken = true; }} />`
+                : html`<span style="font-size:48px">♪</span>`;
+            })()}
           </div>
-          <div class="vol">
-            <button @click=${() => toggleMute(id)} title="Mute">${this.vol?.muted ? "🔇" : "🔊"}</button>
-            <input type="range" min="0" max="100" .value=${String(this.vol?.actual ?? 0)}
-                   @input=${(e: Event) => setVolume(id, Number((e.target as HTMLInputElement).value))} />
+          <div class="meta">
+            <div class="title">${title}</div>
+            <div class="sub">${source ? html`<span class="source-pill">${source}</span>` : ""}${subtitle}</div>
           </div>
-        </div>
 
-        <div style="height: 16px"></div>
-        <div class="card col">
-          <h3>Quick actions</h3>
-          <div class="row" style="flex-wrap: wrap; gap: 8px;">
+          <div class="controls">
+            <button @click=${() => press(id, "PREV_TRACK")}>⏮</button>
+            <button @click=${() => press(id, "REPEAT_OFF")}>↻</button>
+            <button class="play" @click=${() => press(id, playPause)}>${this.playing() ? "⏸" : "▶"}</button>
+            <button @click=${() => press(id, "SHUFFLE_ON")}>⤮</button>
+            <button @click=${() => press(id, "NEXT_TRACK")}>⏭</button>
+          </div>
+        ` : html`
+          <st-favourites></st-favourites>
+        `}
+
+        <st-zone-toggle></st-zone-toggle>
+        <st-zone-volumes speaker-id=${id}></st-zone-volumes>
+
+        <div class="quick">
+          <h3 style="margin:16px 0 8px; color: var(--fg-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Quick actions</h3>
+          <div class="btn-row">
             <button class="btn" @click=${() => press(id, "AUX_INPUT")}>AUX</button>
             <button class="btn" @click=${() => press(id, "VOLUME_DOWN")}>Vol −</button>
             <button class="btn" @click=${() => press(id, "VOLUME_UP")}>Vol +</button>

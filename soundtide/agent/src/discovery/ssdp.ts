@@ -54,7 +54,11 @@ export class SsdpScanner extends EventEmitter {
       try { socket.addMembership(MULTICAST); } catch (e) { log.debug("addMembership failed", { err: String(e) }); }
       log.info(`scanner bound on ${socket.address().port}`);
       this.search();
-      this.timer = setInterval(() => this.search(), 60_000);
+      // 30s is a balance: speakers respond in ~250ms so this is cheap, but
+      // a powered-on speaker that missed the previous M-SEARCH (Wi-Fi
+      // hand-off, DHCP renewal, etc.) is rediscovered within half a minute
+      // instead of waiting a full minute.
+      this.timer = setInterval(() => this.search(), 30_000);
     });
     this.socket = socket;
   }

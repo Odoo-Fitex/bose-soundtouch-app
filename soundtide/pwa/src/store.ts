@@ -10,6 +10,64 @@ export const $now = map<Record<string, NowPlaying>>({});
 export const $vol = map<Record<string, Volume>>({});
 export const $zones = map<Record<string, Zone>>({});
 
+// Cached artwork keyed by speaker id. Populated when a radio station is
+// started (since the SoundTouch reports no useful artUrl for UPnP streams).
+// Persists across reloads.
+const ART_KEY = "soundtide.cached_art";
+const initialArt = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(ART_KEY) ?? "{}") as Record<string, unknown>;
+    // Old builds may have stuffed objects (or `[object Object]`) into this
+    // map, which then renders as a broken <img> hitting GET /[object Object].
+    // Filter to plausible URLs only.
+    const clean: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof v === "string" && /^(https?:\/\/|data:|\/)/.test(v)) clean[k] = v;
+    }
+    return clean;
+  } catch { return {} as Record<string, string>; }
+})();
+export const $cachedArt = map<Record<string, string>>(initialArt);
+// Persist any legacy-cleanup we did above, so a stale object never re-poisons
+// the next page load.
+localStorage.setItem(ART_KEY, JSON.stringify(initialArt));
+
+/** True iff `s` looks like an http(s)/data URL or a same-origin path. */
+export function isImageUrl(s: unknown): s is string {
+  return typeof s === "string" && /^(https?:\/\/|data:|\/)/.test(s);
+}
+
+export function recordArt(speakerId: string, url: string | null | undefined | unknown) {
+  if (!isImageUrl(url)) { $cachedArt.setKey(speakerId, ""); }
+  else { $cachedArt.setKey(speakerId, url); }
+  localStorage.setItem(ART_KEY, JSON.stringify($cachedArt.get()));
+}
+
+// Sleep timer: epoch ms when the timer should fire, or null if disabled.
+const SLEEP_KEY = "soundtide.sleep_at";
+const initialSleep = Number(localStorage.getItem(SLEEP_KEY) ?? "");
+export const $sleepAt = atom<number | null>(Number.isFinite(initialSleep) && initialSleep > Date.now() ? initialSleep : null);
+$sleepAt.subscribe((v) => {
+  if (v) localStorage.setItem(SLEEP_KEY, String(v));
+  else localStorage.removeItem(SLEEP_KEY);
+});
+
+// Theme: auto follows prefers-color-scheme; light/dark are explicit.
+export type Theme = "auto" | "light" | "dark";
+export const $theme = atom<Theme>((localStorage.getItem("soundtide.theme") as Theme) || "auto");
+$theme.subscribe((v) => {
+  localStorage.setItem("soundtide.theme", v);
+  applyTheme(v);
+});
+export function applyTheme(t: Theme) {
+  const root = document.documentElement;
+  if (t === "auto") {
+    root.removeAttribute("data-theme");
+  } else {
+    root.setAttribute("data-theme", t);
+  }
+}
+
 $selectedSpeaker.subscribe((v) => {
   if (v) localStorage.setItem("soundtide.selected", v);
   else localStorage.removeItem("soundtide.selected");
@@ -19,10 +77,30 @@ let ws: WebSocket | null = null;
 let retry = 1000;
 
 export async function bootstrap() {
+  applyTheme($theme.get());
   await refreshDevices();
   if (!$selectedSpeaker.get() && $devices.get()[0]) $selectedSpeaker.set($devices.get()[0]!.deviceId);
   for (const d of $devices.get()) refreshState(d.deviceId);
   connectWs();
+  startSleepTimerWatcher();
+}
+
+function startSleepTimerWatcher() {
+  // Fires PAUSE on the selected speaker when the deadline elapses.
+  setInterval(async () => {
+    const at = $sleepAt.get();
+    if (!at || Date.now() < at) return;
+    $sleepAt.set(null);
+    const id = $selectedSpeaker.get();
+    if (!id) return;
+    try {
+      await api.key(id, "PAUSE");
+      // After a short grace period, also send POWER so the speaker sleeps.
+      setTimeout(() => api.key(id, "POWER").catch(() => undefined), 1500);
+    } catch (e) {
+      console.warn("sleep timer failed", e);
+    }
+  }, 5000);
 }
 
 export async function refreshDevices() {

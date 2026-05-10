@@ -36,12 +36,13 @@ export interface Device {
 export interface Volume { target: number; actual: number; muted: boolean; }
 export interface NowPlaying {
   source: string;
-  contentItem: { source: string; itemName?: string } | null;
+  contentItem: { source: string; sourceAccount?: string; location?: string; itemName?: string } | null;
   track: string | null;
   artist: string | null;
   album: string | null;
   stationName: string | null;
   artUrl: string | null;
+  artStatus: string | null;
   playStatus: string | null;
   description: string | null;
   stationLocation: string | null;
@@ -95,9 +96,24 @@ function authHeader(): Record<string, string> {
 }
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json", ...authHeader() };
-  const res = await fetch(`${apiBase}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
+  // Only send Content-Type when there's an actual body. Setting it on an empty
+  // POST makes Fastify try to parse "" as JSON and 400.
+  const headers: Record<string, string> = { ...authHeader() };
+  let payload: string | undefined;
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    payload = JSON.stringify(body);
+  }
+  const res = await fetch(`${apiBase}${path}`, { method, headers, body: payload });
+  if (!res.ok) {
+    // Try to surface the server's `error` message instead of a bare status.
+    let detail = `${res.status}`;
+    try {
+      const j = await res.clone().json() as { error?: string };
+      if (j?.error) detail = j.error;
+    } catch { /* not JSON */ }
+    throw new Error(`${method} ${path}: ${detail}`);
+  }
   const ct = res.headers.get("content-type") ?? "";
   return ct.includes("json") ? res.json() : (await res.text() as unknown as T);
 }
@@ -110,6 +126,7 @@ export const api = {
 
   // devices
   devices: () => req<Device[]>("GET", "/devices"),
+  rescan: () => req<{ ok: boolean; knownProbed: number; ssdpFired: boolean; devices: Device[] }>("POST", "/devices/rescan"),
   state: (id: string) => req<{ info: any; volume: Volume; nowPlaying: NowPlaying; zone: Zone }>("GET", `/devices/${id}/state`),
   key: (id: string, key: string) => req<{ ok: boolean }>("POST", `/devices/${id}/key`, { key }),
   volume: (id: string, volume?: number, muted?: boolean) => req<{ ok: boolean }>("POST", `/devices/${id}/volume`, { volume, muted }),
@@ -119,7 +136,15 @@ export const api = {
   presets: (speakerId?: string) => req<Preset[]>("GET", `/presets${speakerId ? `?speakerId=${speakerId}` : ""}`),
   savePreset: (p: Partial<Preset>) => req<Preset>("PUT", "/presets", p),
   deletePreset: (id: string) => req<{ ok: boolean }>("DELETE", `/presets/${id}`),
-  playPreset: (id: string) => req<{ ok: boolean }>("POST", `/presets/${id}/play`),
+  playPreset: (id: string, opts: { speakerId?: string; sceneId?: string } = {}) =>
+    req<{ ok: boolean }>("POST", `/presets/${id}/play`, opts),
+
+  // ad-hoc zones (live grouping)
+  zoneAdd: (masterId: string, slaveId: string) =>
+    req<{ ok: boolean }>("POST", `/devices/${masterId}/zone/add`, { slaveId }),
+  zoneRemove: (masterId: string, slaveId: string) =>
+    req<{ ok: boolean }>("POST", `/devices/${masterId}/zone/remove`, { slaveId }),
+  zoneClear: (id: string) => req<{ ok: boolean }>("DELETE", `/devices/${id}/zone`),
 
   // scenes
   scenes: () => req<Scene[]>("GET", "/scenes"),

@@ -66,6 +66,60 @@ docker compose up -d
 
 The agent will discover all SoundTouch speakers on the LAN within ~30 seconds.
 
+## Auto-update from GitHub (optional)
+
+The `scripts/auto-update.sh` script polls GitHub for new commits and rebuilds
+the container when there are any. Wire it up with cron once and the Pi will
+keep itself current.
+
+```bash
+# On the Pi, after the first successful 'docker-compose up -d':
+chmod +x ~/soundtide/scripts/auto-update.sh
+
+# Every 15 minutes, check for updates. Logs go to ~/soundtide/auto-update.log
+( crontab -l 2>/dev/null; \
+  echo "*/15 * * * * /home/$USER/soundtide/scripts/auto-update.sh >> /home/$USER/soundtide/auto-update.log 2>&1" \
+) | crontab -
+
+# Verify it's installed:
+crontab -l
+```
+
+`auto-update.sh` is a no-op when there are no new commits, so polling every
+few minutes is cheap. The first run after a real push takes 30–90 s to
+rebuild and restart the agent.
+
+If you'd rather use systemd than cron:
+
+```bash
+sudo tee /etc/systemd/system/soundtide-update.service >/dev/null <<'EOF'
+[Unit]
+Description=SoundTide auto-update
+After=network-online.target docker.service
+[Service]
+Type=oneshot
+User=$USER
+WorkingDirectory=/home/$USER/soundtide
+ExecStart=/home/$USER/soundtide/scripts/auto-update.sh
+EOF
+sudo tee /etc/systemd/system/soundtide-update.timer >/dev/null <<'EOF'
+[Unit]
+Description=Run soundtide-update every 15 minutes
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now soundtide-update.timer
+systemctl list-timers | grep soundtide   # confirm it's scheduled
+```
+
+The systemd version is slightly cleaner because you can `journalctl -u
+soundtide-update` to see history, and timers survive reboots cleanly.
+
 ## Off-LAN access (optional)
 
 ```bash

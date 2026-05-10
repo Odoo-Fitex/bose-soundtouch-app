@@ -1,6 +1,6 @@
 import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { $devices, $selectedSpeaker } from "../store.js";
+import { $devices, $selectedSpeaker, recordArt, isImageUrl } from "../store.js";
 import { api, type Device, type RadioStation } from "../api.js";
 
 type SubTab = "radio" | "nas";
@@ -67,8 +67,11 @@ export class StBrowse extends LitElement {
   }
 
   private async playStation(s: RadioStation) {
-    if (!this.selected) return;
-    await api.radioPlay(s.uuid, { speakerId: this.selected });
+    const speakerId = $selectedSpeaker.get();
+    console.log("[browse] play station", s.name, "live selectedSpeaker:", speakerId);
+    if (!speakerId) return;
+    recordArt(speakerId, s.favicon || null);
+    await api.radioPlay(s.uuid, { speakerId });
   }
 
   private async savePresetFromStation(s: RadioStation) {
@@ -126,7 +129,7 @@ export class StBrowse extends LitElement {
           <div style="height:12px"></div>
           ${this.results.map(s => html`
             <div class="station">
-              <div class="favicon">${s.favicon ? html`<img src=${s.favicon} alt="" />` : html`<span>📻</span>`}</div>
+              <div class="favicon">${isImageUrl(s.favicon) ? html`<img src=${s.favicon} alt="" />` : html`<span>📻</span>`}</div>
               <div class="meta" @click=${() => this.playStation(s)}>
                 <div class="name">${s.name}</div>
                 <div class="info">${s.country} · ${s.codec || "?"} · ${s.bitrate || "?"} kbps · ${s.tags}</div>

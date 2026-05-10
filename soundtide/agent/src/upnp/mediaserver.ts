@@ -17,8 +17,10 @@
 
 import dgram from "node:dgram";
 import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import crypto from "node:crypto";
+import { pipeline } from "node:stream";
 import { logger } from "../log.js";
 import { didlForItems, protocolInfoFor, type DidlItem } from "./didl.js";
 
@@ -39,16 +41,28 @@ export interface VirtualTrack {
   album?: string;
 }
 
+/**
+ * Optional resolver invoked when a /stream/<id> request arrives for a track
+ * we don't know about (e.g. after an agent restart that wiped in-memory
+ * state). Returning a VirtualTrack republishes it on the fly so saved
+ * presets survive restarts. Returning null falls through to a 404.
+ */
+export type LazyResolver = (id: string) => Promise<VirtualTrack | null>;
+
 export class EmbeddedMediaServer {
   private uuid: string;
   private tracks = new Map<string, VirtualTrack>();
   private server: http.Server | null = null;
   private ssdp: dgram.Socket | null = null;
   private announceTimer: NodeJS.Timeout | null = null;
+  private lazyResolver: LazyResolver | null = null;
 
   constructor(public port: number, uuid?: string) {
     this.uuid = uuid ?? crypto.randomUUID();
   }
+
+  /** Wire up a function that re-publishes tracks on demand for unknown ids. */
+  setLazyResolver(fn: LazyResolver | null) { this.lazyResolver = fn; }
 
   start() {
     this.startHttp();
@@ -109,16 +123,39 @@ export class EmbeddedMediaServer {
       }
       if (req.method === "GET" && url.startsWith("/stream/")) {
         const id = decodeURIComponent(url.slice("/stream/".length));
-        const t = this.tracks.get(id);
-        if (!t) {
-          res.statusCode = 404;
-          res.end("not found");
-          return;
-        }
-        res.statusCode = 302;
-        res.setHeader("Location", t.upstreamUrl);
-        res.setHeader("Content-Type", t.mime);
-        res.end();
+        // Lazy-resolve unknown ids so saved presets survive agent restarts.
+        // The resolver looks the id up against radio-browser etc and (if
+        // successful) re-publishes the track for future requests.
+        const ensureTrack = async (): Promise<VirtualTrack | null> => {
+          const cached = this.tracks.get(id);
+          if (cached) return cached;
+          if (!this.lazyResolver) return null;
+          try {
+            const fresh = await this.lazyResolver(id);
+            if (fresh) {
+              this.tracks.set(fresh.id, fresh);
+              log.info(`lazily registered stream ${id}`);
+              return fresh;
+            }
+          } catch (e) {
+            log.warn(`lazy resolve ${id} failed`, { err: String(e) });
+          }
+          return null;
+        };
+        ensureTrack().then((t) => {
+          if (!t) {
+            res.statusCode = 404;
+            res.end("not found");
+            return;
+          }
+          this.proxyStream(t.upstreamUrl, t.mime, req, res, 5).catch(err => {
+            log.warn(`stream proxy ${id} failed`, { err: String(err) });
+            if (!res.headersSent) {
+              res.statusCode = 502;
+              res.end("upstream error");
+            }
+          });
+        });
         return;
       }
       res.statusCode = 404;
@@ -302,6 +339,90 @@ export class EmbeddedMediaServer {
       `<serviceStateTable></serviceStateTable>`,
       `</scpd>`,
     ].join("");
+  }
+
+  // ---- upstream proxy -------------------------------------------------------
+
+  /**
+   * Pipe the upstream URL's bytes back to the requesting client, following any
+   * redirects ourselves. Handles both http: and https: upstreams, exposes only
+   * plain http to the speaker.
+   */
+  private async proxyStream(
+    upstream: string,
+    fallbackMime: string,
+    clientReq: http.IncomingMessage,
+    clientRes: http.ServerResponse,
+    maxRedirects: number,
+  ): Promise<void> {
+    let target = upstream;
+    let hops = 0;
+    while (hops <= maxRedirects) {
+      const u = new URL(target);
+      const lib = u.protocol === "https:" ? https : http;
+      const upstreamRes = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const upReq = lib.request({
+          method: "GET",
+          host: u.hostname,
+          port: u.port || (u.protocol === "https:" ? 443 : 80),
+          path: u.pathname + u.search,
+          headers: {
+            "User-Agent": "SoundTide/0.1 (UPnP MediaServer)",
+            "Icy-MetaData": "0",                   // no shoutcast metadata frames
+            "Accept": "*/*",
+            ...(clientReq.headers.range ? { Range: String(clientReq.headers.range) } : {}),
+          },
+        }, (r) => resolve(r));
+        upReq.on("error", reject);
+        upReq.end();
+      });
+
+      const status = upstreamRes.statusCode ?? 0;
+      // Follow 3xx redirects ourselves so the speaker only ever sees a 200.
+      if (status >= 300 && status < 400 && upstreamRes.headers.location) {
+        target = new URL(upstreamRes.headers.location, target).toString();
+        upstreamRes.resume(); // discard body
+        hops++;
+        continue;
+      }
+      if (status < 200 || status >= 300) {
+        upstreamRes.resume();
+        clientRes.statusCode = status || 502;
+        clientRes.end();
+        return;
+      }
+
+      // Forward the upstream response to the speaker as-is.
+      const ct = (upstreamRes.headers["content-type"] as string | undefined) || fallbackMime;
+      clientRes.statusCode = 200;
+      clientRes.setHeader("Content-Type", ct);
+      // Streaming radio doesn't tell us a length; that's fine, just stream.
+      const cl = upstreamRes.headers["content-length"];
+      if (cl) clientRes.setHeader("Content-Length", String(cl));
+      // Defensive: some embedded renderers care about Connection: close.
+      clientRes.setHeader("Connection", "close");
+
+      // pipeline() handles errors on either side without crashing the process.
+      // The speaker dropping its TCP connection mid-stream (Stop, source
+      // change) is the common case and triggers ERR_STREAM_PREMATURE_CLOSE —
+      // we intentionally swallow that one.
+      pipeline(upstreamRes, clientRes, (err) => {
+        if (!err) return;
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ERR_STREAM_PREMATURE_CLOSE" || code === "ECONNRESET") {
+          log.debug(`stream proxy closed early (${code})`);
+        } else {
+          log.warn(`stream proxy pipeline error`, { err: err.message });
+        }
+        upstreamRes.destroy();
+      });
+      // If the client (speaker) disconnects, stop pulling from upstream.
+      clientReq.on("close", () => upstreamRes.destroy());
+      return;
+    }
+    log.warn(`stream proxy gave up after ${maxRedirects} redirects`, { upstream });
+    clientRes.statusCode = 508;
+    clientRes.end();
   }
 
   // ---- helpers --------------------------------------------------------------

@@ -16,20 +16,36 @@ export class SoundTouchClient {
     return `http://${this.ip}:8090${path}`;
   }
 
-  private async get(path: string): Promise<string> {
-    const res = await fetch(this.url(path), { method: "GET" });
-    if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
-    return await res.text();
+  private async get(path: string, timeoutMs = 5000): Promise<string> {
+    // Without an AbortSignal, undici's default keep-alive can keep retrying
+    // for a very long time on a half-down speaker (we've seen ~120s lockups
+    // on a SoundTouch 10 whose Wi-Fi just bounced). Cap at 5s so a discovery
+    // probe fails fast and we keep moving.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(this.url(path), { method: "GET", signal: ac.signal });
+      if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
+      return await res.text();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async post(path: string, body: string): Promise<string> {
+    log.debug(`POST ${this.ip}${path}`, { body });
     const res = await fetch(this.url(path), {
       method: "POST",
       headers: { "Content-Type": "application/xml" },
       body,
     });
-    if (!res.ok) throw new Error(`POST ${path} → ${res.status}`);
-    return await res.text();
+    const text = await res.text();
+    if (!res.ok || /<errors\b/.test(text)) {
+      log.warn(`POST ${this.ip}${path} rejected`, { status: res.status, body, response: text });
+      throw new Error(`POST ${path} → ${res.status}: ${text.slice(0, 200)}`);
+    }
+    log.debug(`POST ${this.ip}${path} ok`, { response: text.slice(0, 80) });
+    return text;
   }
 
   async info(): Promise<DeviceInfo> {

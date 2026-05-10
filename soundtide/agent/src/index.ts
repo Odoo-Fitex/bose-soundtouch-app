@@ -15,6 +15,19 @@ const log = logger("main");
 async function main() {
   log.info("SoundTide agent starting");
 
+  // Soft-land stream errors so a misbehaving upstream radio source can't crash
+  // the whole agent. We log them; the proxy itself handles per-stream cleanup.
+  process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+    if (err.code === "ERR_STREAM_PREMATURE_CLOSE" || err.code === "ECONNRESET") {
+      log.warn(`swallowed stream error ${err.code}`);
+      return;
+    }
+    log.error(`uncaughtException`, { err: err.stack ?? String(err) });
+  });
+  process.on("unhandledRejection", (reason) => {
+    log.error(`unhandledRejection`, { reason: String(reason) });
+  });
+
   // Discovery + speaker control.
   const registry = new DeviceRegistry();
   registry.start();
@@ -38,6 +51,24 @@ async function main() {
   await radio.chooseHost();
   const dlna = new DlnaBrowser();
   await dlna.start();
+
+  // Make MS lazy: when the speaker asks for a /stream/r-<uuid> we don't
+  // currently know about (typically after an agent restart), look the
+  // station up against radio-browser and re-publish on the fly so saved
+  // presets keep working.
+  ms.setLazyResolver(async (id) => {
+    const m = id.match(/^r-([a-f0-9-]+)$/i);
+    if (!m) return null;
+    const station = await radio.byUuid(m[1]!);
+    if (!station) return null;
+    return {
+      id,
+      title: station.name,
+      upstreamUrl: station.url,
+      mime: radio.guessMime(station),
+      creator: station.country || undefined,
+    };
+  });
 
   // Playback orchestrator.
   const playback = new PlaybackService(registry, ms, radio);

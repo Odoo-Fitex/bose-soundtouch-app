@@ -7,6 +7,10 @@ import "./st-zones.js";
 import "./st-browse.js";
 import "./st-schedules.js";
 import "./st-settings.js";
+import "./st-mini-player.js";
+import "./st-room-strip.js";
+import "./st-sleep-timer.js";
+import "./st-onboarding.js";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "now",      label: "Now",       icon: "▶" },
@@ -20,11 +24,12 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 @customElement("st-app")
 export class StApp extends LitElement {
   @state() private tab: Tab = "now";
+  @state() private sleepOpen = false;
 
   static styles = css`
     :host {
       display: grid;
-      grid-template-rows: 1fr auto;
+      grid-template-rows: auto 1fr auto auto;
       height: 100dvh;
       background: var(--bg);
       color: var(--fg);
@@ -62,6 +67,8 @@ export class StApp extends LitElement {
 
   render() {
     return html`
+      <st-onboarding></st-onboarding>
+      <st-room-strip></st-room-strip>
       <main>
         ${this.tab === "now"      ? html`<st-now-playing></st-now-playing>` : ""}
         ${this.tab === "presets"  ? html`<st-presets></st-presets>` : ""}
@@ -70,6 +77,7 @@ export class StApp extends LitElement {
         ${this.tab === "schedule" ? html`<st-schedules></st-schedules>` : ""}
         ${this.tab === "settings" ? html`<st-settings></st-settings>` : ""}
       </main>
+      <st-mini-player @open-sleep=${() => (this.sleepOpen = true)}></st-mini-player>
       <nav>
         ${TABS.map((t) => html`
           <button class=${t.id === this.tab ? "active" : ""} @click=${() => $tab.set(t.id)}>
@@ -77,6 +85,7 @@ export class StApp extends LitElement {
           </button>
         `)}
       </nav>
+      ${this.sleepOpen ? html`<st-sleep-timer @close=${() => (this.sleepOpen = false)}></st-sleep-timer>` : ""}
     `;
   }
 }

@@ -25,6 +25,11 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
+        // Replace any stale SW immediately so a deploy actually takes effect
+        // without users having to close and reopen the PWA.
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: /\/health$/,
